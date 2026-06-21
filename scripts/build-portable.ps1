@@ -2,12 +2,13 @@ $ErrorActionPreference = "Stop"
 
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $packagedDir = Join-Path $root "packaged"
-$appDir = Join-Path $packagedDir "Markup Sketcher-win32-x64"
+$appDir = Join-Path $packagedDir "Sketcher-win32-x64"
 $releaseDir = Join-Path $root "release"
 $zipPath = Join-Path $releaseDir "markup-sketcher-app.zip"
 $stubSource = Join-Path $releaseDir "PortableLauncher.cs"
 $stubExe = Join-Path $releaseDir "PortableLauncher.exe"
-$portableExe = Join-Path $releaseDir "Markup Sketcher Portable.exe"
+$portableExe = Join-Path $releaseDir "Sketcher.exe"
+$iconPath = Join-Path $root "assets\app-icon.ico"
 $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 
 if (-not (Test-Path $csc)) {
@@ -22,8 +23,9 @@ New-Item -ItemType Directory -Path $releaseDir | Out-Null
 
 Push-Location $root
 try {
+  powershell -ExecutionPolicy Bypass -File ".\scripts\generate-icon.ps1"
   npm run build
-  npx electron-packager . "Markup Sketcher" --platform=win32 --arch=x64 --out=packaged --overwrite --ignore="^/node_modules/(electron-builder|electron-packager|@electron/packager|app-builder-lib|builder-util|7zip-bin|electron-winstaller|electron-installer-.*)" --ignore="^/release" --ignore="^/packaged" --ignore="^/src"
+  npx electron-packager . "Sketcher" --platform=win32 --arch=x64 --icon="$iconPath" --out=packaged --overwrite --ignore="^/node_modules/(electron-builder|electron-packager|@electron/packager|app-builder-lib|builder-util|7zip-bin|electron-winstaller|electron-installer-.*)" --ignore="^/release" --ignore="^/packaged" --ignore="^/src"
 }
 finally {
   Pop-Location
@@ -54,12 +56,12 @@ public static class PortableLauncher
         {
             string self = Assembly.GetExecutingAssembly().Location;
             byte[] zipBytes = ReadAppPayload(self);
-            string extractRoot = Path.Combine(Path.GetTempPath(), "MarkupSketcherPortable");
+            string extractRoot = Path.Combine(Path.GetTempPath(), "SketcherPortable");
             string appRoot = Path.Combine(extractRoot, "app");
             string marker = Path.Combine(extractRoot, "payload.size");
 
             string sizeText = zipBytes.Length.ToString();
-            if (!File.Exists(Path.Combine(appRoot, "Markup Sketcher.exe")) || !File.Exists(marker) || File.ReadAllText(marker) != sizeText)
+            if (!File.Exists(Path.Combine(appRoot, "Sketcher.exe")) || !File.Exists(marker) || File.ReadAllText(marker) != sizeText)
             {
                 if (Directory.Exists(appRoot))
                 {
@@ -80,7 +82,7 @@ public static class PortableLauncher
 
             Process.Start(new ProcessStartInfo
             {
-                FileName = Path.Combine(appRoot, "Markup Sketcher.exe"),
+                FileName = Path.Combine(appRoot, "Sketcher.exe"),
                 WorkingDirectory = appRoot,
                 UseShellExecute = true
             });
@@ -89,7 +91,7 @@ public static class PortableLauncher
         }
         catch (Exception ex)
         {
-            File.WriteAllText(Path.Combine(Path.GetTempPath(), "MarkupSketcherPortable-error.txt"), ex.ToString());
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "SketcherPortable-error.txt"), ex.ToString());
             return 1;
         }
     }
@@ -126,7 +128,7 @@ public static class PortableLauncher
 }
 '@ | Set-Content -LiteralPath $stubSource -Encoding UTF8
 
-& $csc /nologo /target:winexe /out:$stubExe /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll $stubSource
+& $csc /nologo /target:winexe /win32icon:$iconPath /out:$stubExe /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll $stubSource
 
 $stubBytes = [System.IO.File]::ReadAllBytes($stubExe)
 $zipBytes = [System.IO.File]::ReadAllBytes($zipPath)

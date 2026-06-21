@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Sketcher ant icon">
+  <rect width="256" height="256" rx="54" fill="#d7ff72"/>
+  <path fill="#050805" d="M72 158c-17 0-31-14-31-31s14-31 31-31c9 0 18 4 24 11 10-18 29-30 51-30 32 0 58 26 58 58s-26 58-58 58c-23 0-43-13-52-33-6 5-14 8-23 8Z"/>
+  <circle cx="64" cy="102" r="25" fill="#050805"/>
+  <circle cx="45" cy="92" r="5" fill="#d7ff72"/>
+  <path stroke="#050805" stroke-width="13" stroke-linecap="round" fill="none" d="M52 80 28 50M75 80 91 47M105 172 78 217M139 185 126 225M175 180 204 220M199 151 231 173"/>
+  <path stroke="#d7ff72" stroke-width="9" stroke-linecap="round" fill="none" d="M129 110h44M129 136h54M129 162h37"/>
+</svg>

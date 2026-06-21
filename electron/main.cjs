@@ -11,7 +11,8 @@ function createWindow() {
     minHeight: 700,
     frame: false,
     backgroundColor: '#050805',
-    title: 'Markup Sketcher',
+    icon: path.join(__dirname, '..', 'assets', 'app-icon.ico'),
+    title: 'Sketcher',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

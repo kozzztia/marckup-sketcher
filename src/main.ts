@@ -1,5 +1,4 @@
 import './style.css'
-import { Copy, Pencil, Trash2, type IconNode } from 'lucide'
 import { isValidHTMLNesting } from 'validate-html-nesting'
 
 declare global {
@@ -16,7 +15,14 @@ type BlockNode = {
   id: string
   tag: string
   className: string
-  color: string
+  shadowColor: string
+  locked: boolean
+  flex: boolean
+  flexDirection: 'row' | 'column'
+  justifyContent: 'start' | 'center' | 'between' | 'end'
+  alignItems: 'start' | 'center' | 'stretch' | 'end'
+  gap: number
+  flexSnapshot: Record<string, { x: number; y: number; width: number; height: number }>
   x: number
   y: number
   width: number
@@ -35,7 +41,14 @@ const root: BlockNode = {
   id: 'inner',
   tag: 'div',
   className: 'inner',
-  color: '',
+  shadowColor: '',
+  locked: false,
+  flex: false,
+  flexDirection: 'row',
+  justifyContent: 'start',
+  alignItems: 'stretch',
+  gap: 12,
+  flexSnapshot: {},
   x: 24,
   y: 24,
   width: 1420,
@@ -181,33 +194,32 @@ const popularBlockTags = [
 ]
 const popularInlineTags = ['a', 'br', 'button', 'em', 'i', 'img', 'input', 'label', 'option', 'select', 'small', 'span', 'strong', 'textarea']
 const voidTags = new Set(['area', 'base', 'br', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'])
-const swatches = ['', '#c8ff72', '#91e5ff', '#ffd166', '#f4a7b9', '#b8a4ff']
-const editIcon = iconSvg(Pencil)
-const copyIcon = iconSvg(Copy)
-const deleteIcon = iconSvg(Trash2)
+const swatches = ['', '#101910', '#9cff58', '#58c7ff', '#ffb84d', '#ff5d5d', '#b98cff']
+const storageKey = 'sketcher.document.v1'
+const historyLimit = 80
 
 let selectedId = root.id
 let activeTag = 'div'
-let activeTagGroup: TagGroup = 'block'
+let activeTagGroup: TagGroup | null = null
 let activeClass = ''
 let showAllTags = false
 let includeEmptyClasses = false
-let copied = false
-let selectorsCopied = false
+let rootManuallyResized = false
+let history: string[] = []
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
 app.innerHTML = `
   <div class="window-shell">
     <header class="titlebar">
-      <div>
-        <p class="eyebrow">Markup Sketcher</p>
+      <div class="title-copy">
+        <p class="eyebrow">Sketcher</p>
         <h1>HTML Constructor</h1>
       </div>
-      <div class="window-dots" aria-hidden="true">
-        <button id="minimizeWindow" class="minimize-dot" type="button" title="Minimize"></button>
-        <button id="maximizeWindow" class="maximize-dot" type="button" title="Maximize"></button>
-        <button id="closeWindow" class="close-dot" type="button" title="Close"></button>
+      <div class="window-controls" aria-label="Window controls">
+        <button id="minimizeWindow" class="minimize-window" type="button" title="Minimize">−</button>
+        <button id="maximizeWindow" class="maximize-window" type="button" title="Maximize">□</button>
+        <button id="closeWindow" class="close-window" type="button" title="Close">×</button>
       </div>
     </header>
 
@@ -224,17 +236,12 @@ app.innerHTML = `
         <span>Class</span>
         <input id="classInput" placeholder="class name" />
       </label>
-      <label class="check-tool">
-        <input id="allTagsToggle" type="checkbox" />
-        <span>All tags</span>
-      </label>
-      <label class="check-tool">
-        <input id="emptyClassToggle" type="checkbox" />
-        <span>Empty classes</span>
-      </label>
-      <button id="copyButton" type="button">Copy HTML</button>
-      <button id="copySelectorsButton" type="button">Copy selectors</button>
-      <button id="deleteButton" type="button">Delete selected</button>
+      <div class="file-actions" aria-label="File actions">
+        <button id="undoButton" type="button">Undo</button>
+        <button id="saveButton" type="button">Save</button>
+        <button id="loadButton" type="button">Load</button>
+        <button id="clearButton" type="button">Clear</button>
+      </div>
     </section>
 
     <main class="workspace">
@@ -242,23 +249,38 @@ app.innerHTML = `
         <div id="canvas" class="canvas" aria-label="Drawing canvas"></div>
       </section>
       <aside class="side-panel">
+        <div class="export-actions side-export">
+          <button id="copyButton" type="button">Copy HTML</button>
+          <button id="copySelectorsButton" type="button">Copy selectors</button>
+        </div>
         <div class="inspector">
           <h2>Selected</h2>
           <div id="selectedEditor"></div>
         </div>
-        <div class="tree-panel">
-          <h2>Structure</h2>
+        <details class="tree-panel" open>
+          <summary>Structure</summary>
           <div id="treeView"></div>
-        </div>
-        <div class="html-panel">
-          <h2>HTML</h2>
+        </details>
+        <details class="html-panel">
+          <summary>HTML</summary>
           <pre id="htmlPreview"></pre>
+        </details>
+        <div class="side-options" aria-label="Sketch options">
+          <label class="switch-tool">
+            <span>All tags</span>
+            <input id="allTagsToggle" type="checkbox" />
+          </label>
+          <label class="switch-tool">
+            <span>Empty classes</span>
+            <input id="emptyClassToggle" type="checkbox" />
+          </label>
         </div>
       </aside>
     </main>
   </div>
 `
 
+const canvasWrap = document.querySelector<HTMLDivElement>('.canvas-wrap')!
 const canvas = document.querySelector<HTMLDivElement>('#canvas')!
 const tagSelect = document.querySelector<HTMLSelectElement>('#tagSelect')!
 const blockTagsButton = document.querySelector<HTMLButtonElement>('#blockTagsButton')!
@@ -266,9 +288,12 @@ const inlineTagsButton = document.querySelector<HTMLButtonElement>('#inlineTagsB
 const classInput = document.querySelector<HTMLInputElement>('#classInput')!
 const allTagsToggle = document.querySelector<HTMLInputElement>('#allTagsToggle')!
 const emptyClassToggle = document.querySelector<HTMLInputElement>('#emptyClassToggle')!
+const undoButton = document.querySelector<HTMLButtonElement>('#undoButton')!
+const saveButton = document.querySelector<HTMLButtonElement>('#saveButton')!
+const loadButton = document.querySelector<HTMLButtonElement>('#loadButton')!
+const clearButton = document.querySelector<HTMLButtonElement>('#clearButton')!
 const copyButton = document.querySelector<HTMLButtonElement>('#copyButton')!
 const copySelectorsButton = document.querySelector<HTMLButtonElement>('#copySelectorsButton')!
-const deleteButton = document.querySelector<HTMLButtonElement>('#deleteButton')!
 const minimizeWindowButton = document.querySelector<HTMLButtonElement>('#minimizeWindow')!
 const maximizeWindowButton = document.querySelector<HTMLButtonElement>('#maximizeWindow')!
 const closeWindowButton = document.querySelector<HTMLButtonElement>('#closeWindow')!
@@ -276,8 +301,16 @@ const selectedEditor = document.querySelector<HTMLDivElement>('#selectedEditor')
 const treeView = document.querySelector<HTMLDivElement>('#treeView')!
 const htmlPreview = document.querySelector<HTMLPreElement>('#htmlPreview')!
 
+function fitRootToCanvas() {
+  if (rootManuallyResized) return
+  root.width = Math.max(720, canvasWrap.clientWidth - 48)
+  root.height = Math.max(480, canvasWrap.clientHeight - 48)
+}
+
+fitRootToCanvas()
+
 function currentTagOptions() {
-  if (activeTagGroup === 'block') return showAllTags ? blockTags : popularBlockTags
+  if ((activeTagGroup ?? 'block') === 'block') return showAllTags ? blockTags : popularBlockTags
   return showAllTags ? inlineTags : popularInlineTags
 }
 
@@ -299,17 +332,49 @@ function uid() {
   return `block-${Math.random().toString(16).slice(2)}`
 }
 
-function iconSvg(icon: IconNode) {
-  const children = icon
-    .map(([tag, attrs]) => {
-      const attributes = Object.entries(attrs)
-        .map(([key, value]) => `${key}="${String(value)}"`)
-        .join(' ')
-      return `<${tag} ${attributes}></${tag}>`
-    })
-    .join('')
+function normalizeNode(node: BlockNode): BlockNode {
+  return {
+    id: node.id ?? uid(),
+    tag: node.tag ?? 'div',
+    className: node.className ?? '',
+    shadowColor: node.shadowColor ?? '',
+    locked: Boolean(node.locked),
+    flex: Boolean(node.flex),
+    flexDirection: node.flexDirection ?? 'row',
+    justifyContent: node.justifyContent ?? 'start',
+    alignItems: node.alignItems ?? 'stretch',
+    gap: Number(node.gap) || 12,
+    flexSnapshot: node.flexSnapshot ?? {},
+    x: Number(node.x) || 0,
+    y: Number(node.y) || 0,
+    width: Number(node.width) || 80,
+    height: Number(node.height) || 60,
+    children: (node.children ?? []).map(normalizeNode),
+  }
+}
 
-  return `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${children}</svg>`
+function snapshot() {
+  return JSON.stringify(root)
+}
+
+function restoreSnapshot(value: string) {
+  const parsed = normalizeNode(JSON.parse(value))
+  Object.assign(root, parsed)
+  selectedId = findNode(selectedId) ? selectedId : root.id
+}
+
+function pushHistory() {
+  history.push(snapshot())
+  if (history.length > historyLimit) {
+    history = history.slice(history.length - historyLimit)
+  }
+}
+
+function undo() {
+  const previous = history.pop()
+  if (!previous) return
+  restoreSnapshot(previous)
+  render()
 }
 
 function flatten(node: BlockNode, depth = 0, parentId: string | null = null): FlatBlock[] {
@@ -386,10 +451,135 @@ function cloneNode(node: BlockNode, offsetX = 28, offsetY = 28): BlockNode {
   return {
     ...node,
     id: uid(),
+    flexSnapshot: {},
     x: node.x + offsetX,
     y: node.y + offsetY,
     children: node.children.map((child) => cloneNode(child, offsetX, offsetY)),
   }
+}
+
+function flexStylesFor(node: BlockNode, level: number) {
+  if (!node.flex) return ''
+
+  const indent = '  '.repeat(level + 1)
+  const justifyMap = {
+    start: 'flex-start',
+    center: 'center',
+    between: 'space-between',
+    end: 'flex-end',
+  }
+  const alignMap = {
+    start: 'flex-start',
+    center: 'center',
+    stretch: 'stretch',
+    end: 'flex-end',
+  }
+
+  return [
+    `${indent}display: flex;`,
+    `${indent}flex-direction: ${node.flexDirection};`,
+    `${indent}justify-content: ${justifyMap[node.justifyContent]};`,
+    `${indent}align-items: ${alignMap[node.alignItems]};`,
+    `${indent}gap: ${node.gap}px;`,
+  ].join('\n')
+}
+
+function saveFlexSnapshot(parent: BlockNode) {
+  parent.flexSnapshot = Object.fromEntries(parent.children.map((child) => [child.id, { x: child.x, y: child.y, width: child.width, height: child.height }]))
+}
+
+function restoreFlexSnapshot(parent: BlockNode) {
+  parent.children.forEach((child) => {
+    const saved = parent.flexSnapshot[child.id]
+    if (!saved) return
+    child.x = saved.x
+    child.y = saved.y
+    child.width = saved.width
+    child.height = saved.height
+  })
+  parent.flexSnapshot = {}
+}
+
+function applyFlexLayout(parent: BlockNode) {
+  if (!parent.flex || parent.locked || !parent.children.length) return
+
+  const padding = 18
+  const gap = Math.max(0, parent.gap)
+  const count = parent.children.length
+  const innerLeft = parent.x + padding
+  const innerTop = parent.y + padding + 24
+  const innerWidth = Math.max(48, parent.width - padding * 2)
+  const innerHeight = Math.max(48, parent.height - padding * 2 - 24)
+  const savedBox = (child: BlockNode) => parent.flexSnapshot[child.id] ?? child
+
+  if (parent.flexDirection === 'row') {
+    const naturalWidths = parent.children.map((child) => Math.max(36, Math.min(savedBox(child).width, innerWidth)))
+    const naturalTotal = naturalWidths.reduce((sum, width) => sum + width, 0)
+    const availableForItems = Math.max(36 * count, innerWidth - gap * (count - 1))
+    const scale = naturalTotal > availableForItems ? availableForItems / naturalTotal : 1
+    const itemWidths = naturalWidths.map((width) => width * scale)
+    const totalWidth = itemWidths.reduce((sum, width) => sum + width, 0) + gap * (count - 1)
+    const startX =
+      parent.justifyContent === 'center'
+        ? innerLeft + (innerWidth - totalWidth) / 2
+        : parent.justifyContent === 'end'
+          ? innerLeft + innerWidth - totalWidth
+          : innerLeft
+    const distributedGap =
+      parent.justifyContent === 'between' && count > 1 ? Math.max(gap, (innerWidth - itemWidths.reduce((sum, width) => sum + width, 0)) / (count - 1)) : gap
+    let currentX = startX
+
+    parent.children.forEach((child, index) => {
+      const naturalBox = savedBox(child)
+      const itemWidth = itemWidths[index]
+      const itemHeight = parent.alignItems === 'stretch' ? innerHeight : Math.min(innerHeight, naturalBox.height)
+      child.x = currentX
+      child.width = itemWidth
+      child.height = itemHeight
+      child.y =
+        parent.alignItems === 'center'
+          ? innerTop + (innerHeight - itemHeight) / 2
+          : parent.alignItems === 'end'
+            ? innerTop + innerHeight - itemHeight
+            : innerTop
+      currentX += itemWidth + distributedGap
+      applyFlexLayout(child)
+    })
+    return
+  }
+
+  const naturalHeights = parent.children.map((child) => Math.max(36, Math.min(savedBox(child).height, innerHeight)))
+  const naturalTotal = naturalHeights.reduce((sum, height) => sum + height, 0)
+  const availableForItems = Math.max(36 * count, innerHeight - gap * (count - 1))
+  const scale = naturalTotal > availableForItems ? availableForItems / naturalTotal : 1
+  const itemHeights = naturalHeights.map((height) => height * scale)
+  const totalHeight = itemHeights.reduce((sum, height) => sum + height, 0) + gap * (count - 1)
+  const startY =
+    parent.justifyContent === 'center'
+      ? innerTop + (innerHeight - totalHeight) / 2
+      : parent.justifyContent === 'end'
+        ? innerTop + innerHeight - totalHeight
+        : innerTop
+  const distributedGap =
+    parent.justifyContent === 'between' && count > 1 ? Math.max(gap, (innerHeight - itemHeights.reduce((sum, height) => sum + height, 0)) / (count - 1)) : gap
+  let currentY = startY
+
+  parent.children.forEach((child, index) => {
+    const naturalBox = savedBox(child)
+    const itemHeight = itemHeights[index]
+    const itemWidth = parent.alignItems === 'stretch' ? innerWidth : Math.min(innerWidth, naturalBox.width)
+    child.y = currentY
+    child.height = itemHeight
+    child.width = itemWidth
+    child.x =
+      parent.alignItems === 'center'
+        ? innerLeft + (innerWidth - itemWidth) / 2
+        : parent.alignItems === 'end'
+          ? innerLeft + innerWidth - itemWidth
+          : innerLeft
+    currentY += itemHeight + distributedGap
+    applyFlexLayout(child)
+  })
 }
 
 function moveNodeWithChildren(node: BlockNode, dx: number, dy: number) {
@@ -428,16 +618,8 @@ function chooseParent(block: BlockNode, ignoredIds = new Set<string>()) {
   return findNode(matching[0]?.candidate.id ?? root.id) ?? root
 }
 
-function sortChildrenByCanvas(node: BlockNode) {
-  node.children.sort((a, b) => a.x - b.x || a.y - b.y)
-  node.children.forEach(sortChildrenByCanvas)
-}
-
 function syncMovedNodeHierarchy(node: BlockNode) {
-  if (node.id === root.id) {
-    sortChildrenByCanvas(root)
-    return
-  }
+  if (node.id === root.id) return
 
   const subtreeIds = new Set(flatten(node).map((item) => item.id))
   const nextParent = chooseParent(node, subtreeIds)
@@ -447,10 +629,53 @@ function syncMovedNodeHierarchy(node: BlockNode) {
     const detached = detachNode(node.id)
     if (detached) {
       nextParent.children.push(detached)
+      applyFlexLayout(nextParent)
     }
+  } else if (currentParent?.flex) {
+    applyFlexLayout(currentParent)
   }
+}
 
-  sortChildrenByCanvas(root)
+function deleteSelectedBlock() {
+  const selected = findNode(selectedId)
+  if (!selected || selected.id === root.id || selected.locked) return
+  pushHistory()
+  removeNode(selectedId)
+  selectedId = root.id
+  render()
+}
+
+function copySelectedBlock() {
+  const selected = findNode(selectedId)
+  const parent = selected ? findParent(selected.id) : null
+  if (!selected || !parent || selected.id === root.id || selected.locked) return
+  pushHistory()
+  const clone = cloneNode(selected)
+  parent.children.push(clone)
+  applyFlexLayout(parent)
+  selectedId = clone.id
+  render()
+}
+
+function saveDocument() {
+  localStorage.setItem(storageKey, snapshot())
+}
+
+function loadDocument() {
+  const saved = localStorage.getItem(storageKey)
+  if (!saved) return
+  pushHistory()
+  restoreSnapshot(saved)
+  render()
+}
+
+function clearDocument() {
+  pushHistory()
+  root.children = []
+  selectedId = root.id
+  rootManuallyResized = false
+  fitRootToCanvas()
+  render()
 }
 
 function getLabel(block: BlockNode) {
@@ -465,33 +690,39 @@ function escapeAttr(value: string) {
   return escapeHtml(value).replaceAll('"', '&quot;')
 }
 
+function safeColor(value: string) {
+  return /^#[\da-f]{3,8}$/i.test(value) ? value : ''
+}
+
 function htmlFor(node: BlockNode, level = 0): string {
   const indent = '  '.repeat(level)
   const classPart = node.className || includeEmptyClasses ? ` class="${escapeAttr(node.className)}"` : ''
-  const comment = `${indent}<!-- ${getLabel(node)} -->`
   const open = `${indent}<${node.tag}${classPart}>`
   const close = `${indent}</${node.tag}>`
 
   if (voidTags.has(node.tag)) {
-    return `${comment}\n${open}`
+    return open
   }
 
   if (!node.children.length) {
-    return `${comment}\n${indent}<${node.tag}${classPart}></${node.tag}>`
+    return `${indent}<${node.tag}${classPart}></${node.tag}>`
   }
 
-  return `${comment}\n${open}\n${node.children.map((child) => htmlFor(child, level + 1)).join('\n\n')}\n${close}`
+  return `${open}\n${node.children.map((child) => htmlFor(child, level + 1)).join('\n')}\n${close}`
 }
 
 function selectorFor(node: BlockNode, level = 0): string {
   const indent = '  '.repeat(level)
   const selector = node.className ? `.${node.className}` : node.tag
+  const flexStyles = flexStylesFor(node, level)
 
-  if (!node.children.length) {
+  if (!node.children.length && !flexStyles) {
     return `${indent}${selector} {\n${indent}}`
   }
 
-  return `${indent}${selector} {\n${node.children.map((child) => selectorFor(child, level + 1)).join('\n\n')}\n${indent}}`
+  const body = [flexStyles, node.children.map((child) => selectorFor(child, level + 1)).join('\n\n')].filter(Boolean).join('\n\n')
+
+  return `${indent}${selector} {\n${body}\n${indent}}`
 }
 
 function nestingIssue(node: BlockNode) {
@@ -535,7 +766,12 @@ function nestingIssue(node: BlockNode) {
 function render() {
   const blocks = flatten(root)
   const selected = findNode(selectedId) ?? root
+  const canUseFlex = selected.children.length > 0
   selectedId = selected.id
+  const contentRight = Math.max(...blocks.map((block) => block.x + block.width + 24))
+  const contentBottom = Math.max(...blocks.map((block) => block.y + block.height + 24))
+  canvas.style.width = `${Math.ceil(Math.max(contentRight, canvasWrap.clientWidth))}px`
+  canvas.style.height = `${Math.ceil(Math.max(contentBottom, canvasWrap.clientHeight))}px`
 
   tagSelect.value = activeTag
   renderTagSelect(tagSelect, activeTag)
@@ -546,6 +782,20 @@ function render() {
   emptyClassToggle.checked = includeEmptyClasses
 
   canvas.innerHTML = ''
+  canvas.innerHTML = `
+    <span class="canvas-guide guide-top">TOP</span>
+    <span class="canvas-guide guide-right">RIGHT</span>
+    <span class="canvas-guide guide-bottom">BOTTOM</span>
+    <span class="canvas-guide guide-left">LEFT</span>
+    ${
+      moveGuide
+        ? `<span class="move-guide guide-top-edge" style="top:${moveGuide.top}px"></span>
+           <span class="move-guide guide-bottom-edge" style="top:${moveGuide.bottom}px"></span>
+           <span class="move-guide guide-left-edge" style="left:${moveGuide.left}px"></span>
+           <span class="move-guide guide-right-edge" style="left:${moveGuide.right}px"></span>`
+        : ''
+    }
+  `
   blocks.forEach((block) => {
     const el = document.createElement('button')
     el.type = 'button'
@@ -555,17 +805,22 @@ function render() {
     el.style.width = `${block.width}px`
     el.style.height = `${block.height}px`
     el.style.zIndex = String(block.depth + 1)
-    el.style.background = block.color || `rgba(0, 0, 0, ${0.035 + block.depth * 0.035})`
+    el.style.background = voidTags.has(block.tag) ? 'rgba(0, 0, 0, 0.88)' : `rgba(0, 0, 0, ${0.035 + block.depth * 0.035})`
     el.style.borderColor = block.id === root.id ? '#9cff58' : '#89e85a'
+    const shadows = []
+    if (block.shadowColor) {
+      shadows.push(`0 0 0 2px ${block.shadowColor}`, `0 0 18px ${block.shadowColor}`)
+    }
+    if (block.id === selectedId) {
+      shadows.push('inset 0 0 0 1px #0f180e', '0 0 0 2px rgba(167, 255, 63, 0.65)')
+    }
+    if (shadows.length) {
+      el.style.boxShadow = shadows.join(', ')
+    }
     el.dataset.id = block.id
     el.innerHTML = `
       <span class="block-label" data-id="${block.id}">
-        <strong>${block.tag}.</strong><input data-class-id="${block.id}" value="${escapeAttr(block.className)}" placeholder="-">
-      </span>
-      <span class="block-actions">
-        <button class="edit-action" type="button" data-edit-id="${block.id}" title="Edit">${editIcon}</button>
-        ${block.id === root.id ? '' : `<button class="copy-action" type="button" data-copy-id="${block.id}" title="Copy">${copyIcon}</button>`}
-        ${block.id === root.id ? '' : `<button class="delete-action" type="button" data-delete-id="${block.id}" title="Delete">${deleteIcon}</button>`}
+        <strong>${block.tag}.</strong><input data-class-id="${block.id}" value="${escapeAttr(block.className)}" placeholder="-" ${block.locked ? 'disabled' : ''}>
       </span>
       <span class="resize-handle" data-resize-id="${block.id}" aria-hidden="true"></span>
     `
@@ -573,15 +828,50 @@ function render() {
   })
 
   selectedEditor.innerHTML = `
-    <label><span>Tag</span><select id="selectedTag"></select></label>
-    <label><span>Class</span><input id="selectedClass" value="${escapeAttr(selected.className)}" placeholder="-" ${selected.id === root.id ? 'disabled' : ''}></label>
+    <label><span>Tag</span><select id="selectedTag" ${selected.locked ? 'disabled' : ''}></select></label>
+    <label><span>Class</span><input id="selectedClass" value="${escapeAttr(selected.className)}" placeholder="-" ${selected.id === root.id || selected.locked ? 'disabled' : ''}></label>
+    <div class="selected-actions">
+      <button id="lockSelectedButton" type="button">${selected.locked ? 'Unlock' : 'Lock'}</button>
+      <button id="copySelectedButton" type="button" ${selected.id === root.id || selected.locked ? 'disabled' : ''}>Copy</button>
+      <button id="deleteSelectedPanelButton" type="button" ${selected.id === root.id || selected.locked ? 'disabled' : ''}>Delete</button>
+    </div>
+    <div class="flex-panel ${selected.flex ? 'active' : ''}">
+      <label class="switch-tool">
+        <span>Flex</span>
+        <input id="selectedFlex" type="checkbox" ${selected.flex ? 'checked' : ''} ${selected.locked || !canUseFlex ? 'disabled' : ''}>
+      </label>
+      <div class="flex-drawer">
+      <div class="flex-grid">
+        <label><span>Direction</span><select id="selectedFlexDirection" ${!selected.flex || selected.locked ? 'disabled' : ''}>
+          <option value="row" ${selected.flexDirection === 'row' ? 'selected' : ''}>row</option>
+          <option value="column" ${selected.flexDirection === 'column' ? 'selected' : ''}>column</option>
+        </select></label>
+        <label><span>Gap</span><input id="selectedFlexGap" type="number" min="0" max="96" value="${selected.gap}" ${!selected.flex || selected.locked ? 'disabled' : ''}></label>
+        <label><span>Justify</span><select id="selectedJustify" ${!selected.flex || selected.locked ? 'disabled' : ''}>
+          <option value="start" ${selected.justifyContent === 'start' ? 'selected' : ''}>start</option>
+          <option value="center" ${selected.justifyContent === 'center' ? 'selected' : ''}>center</option>
+          <option value="between" ${selected.justifyContent === 'between' ? 'selected' : ''}>between</option>
+          <option value="end" ${selected.justifyContent === 'end' ? 'selected' : ''}>end</option>
+        </select></label>
+        <label><span>Align</span><select id="selectedAlign" ${!selected.flex || selected.locked ? 'disabled' : ''}>
+          <option value="start" ${selected.alignItems === 'start' ? 'selected' : ''}>start</option>
+          <option value="center" ${selected.alignItems === 'center' ? 'selected' : ''}>center</option>
+          <option value="stretch" ${selected.alignItems === 'stretch' ? 'selected' : ''}>stretch</option>
+          <option value="end" ${selected.alignItems === 'end' ? 'selected' : ''}>end</option>
+        </select></label>
+      </div>
+      </div>
+    </div>
     <div class="swatches">${swatches.map((color) => `<button type="button" data-color="${color}" style="--swatch:${color || 'transparent'}" aria-label="${color || 'default'}"></button>`).join('')}</div>
   `
 
   treeView.innerHTML = blocks
     .map((block) => {
       const issue = nestingIssue(block)
-      return `<button type="button" class="${block.id === selectedId ? 'active' : ''} ${issue ? 'invalid' : ''}" data-id="${block.id}" title="${escapeAttr(issue ?? '')}" style="margin-left:${block.depth * 16}px;width:calc(100% - ${block.depth * 16}px)">${escapeHtml(getLabel(block))}</button>`
+      const treeColor = safeColor(block.shadowColor)
+      const colorClass = treeColor ? 'has-shadow-color' : ''
+      const colorStyle = treeColor ? `;--tree-color:${treeColor}` : ''
+      return `<button type="button" class="${block.id === selectedId ? 'active' : ''} ${issue ? 'invalid' : ''} ${colorClass}" data-id="${block.id}" title="${escapeAttr(issue ?? '')}" style="margin-left:${block.depth * 16}px;width:calc(100% - ${block.depth * 16}px)${colorStyle}">${escapeHtml(getLabel(block))}</button>`
     })
     .join('')
 
@@ -590,11 +880,15 @@ function render() {
   const selectedTagSelect = document.querySelector<HTMLSelectElement>('#selectedTag')!
   renderTagSelect(selectedTagSelect, selected.tag, true)
   selectedTagSelect.addEventListener('change', (event) => {
+    if (selected.locked) return
+    pushHistory()
     selected.tag = (event.target as HTMLSelectElement).value
     render()
   })
   const selectedClassInput = document.querySelector<HTMLInputElement>('#selectedClass')!
   selectedClassInput.addEventListener('change', (event) => {
+    if (selected.locked) return
+    pushHistory()
     selected.className = (event.target as HTMLInputElement).value.trim()
     render()
   })
@@ -605,9 +899,62 @@ function render() {
   })
   selectedEditor.querySelectorAll<HTMLButtonElement>('[data-color]').forEach((button) => {
     button.addEventListener('click', () => {
-      selected.color = button.dataset.color ?? ''
+      if (selected.locked) return
+      pushHistory()
+      selected.shadowColor = button.dataset.color ?? ''
       render()
     })
+  })
+  document.querySelector<HTMLButtonElement>('#lockSelectedButton')!.addEventListener('click', () => {
+    pushHistory()
+    selected.locked = !selected.locked
+    render()
+  })
+  document.querySelector<HTMLButtonElement>('#copySelectedButton')!.addEventListener('click', () => {
+    copySelectedBlock()
+  })
+  document.querySelector<HTMLButtonElement>('#deleteSelectedPanelButton')!.addEventListener('click', () => {
+    deleteSelectedBlock()
+  })
+  document.querySelector<HTMLInputElement>('#selectedFlex')!.addEventListener('change', (event) => {
+    if (selected.locked || !canUseFlex) return
+    pushHistory()
+    selected.flex = (event.target as HTMLInputElement).checked
+    if (selected.flex) {
+      saveFlexSnapshot(selected)
+      applyFlexLayout(selected)
+    } else {
+      restoreFlexSnapshot(selected)
+    }
+    render()
+  })
+  document.querySelector<HTMLSelectElement>('#selectedFlexDirection')!.addEventListener('change', (event) => {
+    if (selected.locked) return
+    pushHistory()
+    selected.flexDirection = (event.target as HTMLSelectElement).value as BlockNode['flexDirection']
+    applyFlexLayout(selected)
+    render()
+  })
+  document.querySelector<HTMLSelectElement>('#selectedJustify')!.addEventListener('change', (event) => {
+    if (selected.locked) return
+    pushHistory()
+    selected.justifyContent = (event.target as HTMLSelectElement).value as BlockNode['justifyContent']
+    applyFlexLayout(selected)
+    render()
+  })
+  document.querySelector<HTMLSelectElement>('#selectedAlign')!.addEventListener('change', (event) => {
+    if (selected.locked) return
+    pushHistory()
+    selected.alignItems = (event.target as HTMLSelectElement).value as BlockNode['alignItems']
+    applyFlexLayout(selected)
+    render()
+  })
+  document.querySelector<HTMLInputElement>('#selectedFlexGap')!.addEventListener('change', (event) => {
+    if (selected.locked) return
+    pushHistory()
+    selected.gap = Math.max(0, Math.min(96, Number((event.target as HTMLInputElement).value) || 0))
+    applyFlexLayout(selected)
+    render()
   })
 }
 
@@ -623,12 +970,14 @@ let draft: BlockNode | null = null
 let resizing: BlockNode | null = null
 let moving: BlockNode | null = null
 let movedDuringDrag = false
+let moveGuide: { left: number; right: number; top: number; bottom: number } | null = null
 let startX = 0
 let startY = 0
 let startWidth = 0
 let startHeight = 0
 let lastMoveX = 0
 let lastMoveY = 0
+let interactionSnapshot: string | null = null
 
 canvas.addEventListener('pointerdown', (event) => {
   const target = event.target as HTMLElement
@@ -636,10 +985,11 @@ canvas.addEventListener('pointerdown', (event) => {
   const resizeHandle = target.closest<HTMLElement>('[data-resize-id]')
   if (resizeHandle) {
     const node = findNode(resizeHandle.dataset.resizeId ?? root.id)
-    if (!node) return
+    if (!node || node.locked) return
     const point = canvasPoint(event)
     selectedId = node.id
     resizing = node
+    interactionSnapshot = snapshot()
     startX = point.x
     startY = point.y
     startWidth = node.width
@@ -655,50 +1005,19 @@ canvas.addEventListener('pointerdown', (event) => {
     return
   }
 
-  const editButton = target.closest<HTMLButtonElement>('[data-edit-id]')
-  if (editButton) {
-    event.stopPropagation()
-    selectedId = editButton.dataset.editId ?? root.id
-    render()
-    const inlineInput = canvas.querySelector<HTMLInputElement>(`input[data-class-id="${selectedId}"]`)
-    inlineInput?.focus()
-    inlineInput?.select()
-    return
-  }
-
-  const copyButton = target.closest<HTMLButtonElement>('[data-copy-id]')
-  if (copyButton) {
-    event.stopPropagation()
-    const node = findNode(copyButton.dataset.copyId ?? '')
-    const parent = node ? findParent(node.id) : null
-    if (node && parent) {
-      const clone = cloneNode(node)
-      parent.children.push(clone)
-      selectedId = clone.id
-      render()
-    }
-    return
-  }
-
-  const deleteButton = target.closest<HTMLButtonElement>('[data-delete-id]')
-  if (deleteButton) {
-    event.stopPropagation()
-    selectedId = deleteButton.dataset.deleteId ?? root.id
-    if (selectedId !== root.id) {
-      removeNode(selectedId)
-      selectedId = root.id
-      render()
-    }
-    return
-  }
-
   const label = target.closest<HTMLElement>('[data-id]')
   if (label) {
     const node = findNode(label.dataset.id ?? root.id)
     if (!node) return
+    if (node.locked) {
+      selectedId = node.id
+      render()
+      return
+    }
     const point = canvasPoint(event)
     selectedId = node.id
     moving = node
+    interactionSnapshot = snapshot()
     movedDuringDrag = false
     startX = point.x
     startY = point.y
@@ -710,13 +1029,22 @@ canvas.addEventListener('pointerdown', (event) => {
   }
 
   const point = canvasPoint(event)
+  if (!activeTagGroup) return
+
   startX = point.x
   startY = point.y
   draft = {
     id: uid(),
     tag: activeTag,
     className: activeClass.trim(),
-    color: '',
+    shadowColor: '',
+    locked: false,
+    flex: false,
+    flexDirection: 'row',
+    justifyContent: 'start',
+    alignItems: 'stretch',
+    gap: 12,
+    flexSnapshot: {},
     x: startX,
     y: startY,
     width: 1,
@@ -736,6 +1064,12 @@ canvas.addEventListener('pointermove', (event) => {
     moveNodeWithChildren(moving, delta.dx, delta.dy)
     lastMoveX += delta.dx
     lastMoveY += delta.dy
+    moveGuide = {
+      left: moving.x,
+      right: moving.x + moving.width,
+      top: moving.y,
+      bottom: moving.y + moving.height,
+    }
     render()
     return
   }
@@ -769,9 +1103,15 @@ canvas.addEventListener('pointerup', (event) => {
     canvas.releasePointerCapture(event.pointerId)
     const movedNodeId = moving.id
     if (movedDuringDrag) {
+      if (interactionSnapshot) {
+        history.push(interactionSnapshot)
+        if (history.length > historyLimit) history = history.slice(history.length - historyLimit)
+      }
       syncMovedNodeHierarchy(moving)
     }
     moving = null
+    moveGuide = null
+    interactionSnapshot = null
     render()
     if (!movedDuringDrag) {
       const inlineInput = canvas.querySelector<HTMLInputElement>(`input[data-class-id="${movedNodeId}"]`)
@@ -783,7 +1123,16 @@ canvas.addEventListener('pointerup', (event) => {
 
   if (resizing) {
     canvas.releasePointerCapture(event.pointerId)
+    if (interactionSnapshot) {
+      history.push(interactionSnapshot)
+      if (history.length > historyLimit) history = history.slice(history.length - historyLimit)
+    }
+    if (resizing.id === root.id) {
+      rootManuallyResized = true
+    }
+    applyFlexLayout(resizing)
     resizing = null
+    interactionSnapshot = null
     render()
     return
   }
@@ -791,8 +1140,10 @@ canvas.addEventListener('pointerup', (event) => {
   if (!draft) return
   canvas.releasePointerCapture(event.pointerId)
   if (draft.width > 18 && draft.height > 18) {
+    pushHistory()
     const parent = chooseParent(draft)
     parent.children.push(draft)
+    applyFlexLayout(parent)
     selectedId = draft.id
   }
   draft = null
@@ -804,10 +1155,20 @@ tagSelect.addEventListener('change', () => {
 })
 
 blockTagsButton.addEventListener('click', () => {
+  if (activeTagGroup === 'block') {
+    activeTagGroup = null
+    render()
+    return
+  }
   setTagGroup('block')
 })
 
 inlineTagsButton.addEventListener('click', () => {
+  if (activeTagGroup === 'inline') {
+    activeTagGroup = null
+    render()
+    return
+  }
   setTagGroup('inline')
 })
 
@@ -827,11 +1188,25 @@ emptyClassToggle.addEventListener('change', () => {
   render()
 })
 
-deleteButton.addEventListener('click', () => {
-  if (selectedId === root.id) return
-  removeNode(selectedId)
-  selectedId = root.id
-  render()
+undoButton.addEventListener('click', undo)
+saveButton.addEventListener('click', saveDocument)
+loadButton.addEventListener('click', loadDocument)
+clearButton.addEventListener('click', clearDocument)
+
+copyButton.addEventListener('click', async () => {
+  await navigator.clipboard.writeText(htmlFor(root))
+  copyButton.textContent = 'Copied'
+  window.setTimeout(() => {
+    copyButton.textContent = 'Copy HTML'
+  }, 900)
+})
+
+copySelectorsButton.addEventListener('click', async () => {
+  await navigator.clipboard.writeText(selectorFor(root))
+  copySelectorsButton.textContent = 'Copied'
+  window.setTimeout(() => {
+    copySelectorsButton.textContent = 'Copy selectors'
+  }, 900)
 })
 
 minimizeWindowButton.addEventListener('click', () => {
@@ -846,31 +1221,12 @@ closeWindowButton.addEventListener('click', () => {
   void window.markupSketcherWindow?.close()
 })
 
-copyButton.addEventListener('click', async () => {
-  await navigator.clipboard.writeText(htmlFor(root))
-  copied = true
-  copyButton.textContent = 'Copied'
-  window.setTimeout(() => {
-    copied = false
-    copyButton.textContent = copied ? 'Copied' : 'Copy HTML'
-  }, 900)
-})
-
-copySelectorsButton.addEventListener('click', async () => {
-  await navigator.clipboard.writeText(selectorFor(root))
-  selectorsCopied = true
-  copySelectorsButton.textContent = 'Copied'
-  window.setTimeout(() => {
-    selectorsCopied = false
-    copySelectorsButton.textContent = selectorsCopied ? 'Copied' : 'Copy selectors'
-  }, 900)
-})
-
 canvas.addEventListener('change', (event) => {
   const input = (event.target as HTMLElement).closest<HTMLInputElement>('input[data-class-id]')
   if (!input) return
   const node = findNode(input.dataset.classId ?? '')
-  if (!node) return
+  if (!node || node.locked) return
+  pushHistory()
   node.className = input.value.trim()
   selectedId = node.id
   render()
@@ -898,10 +1254,25 @@ window.addEventListener('keydown', (event) => {
 
   if ((event.key === 'Delete' || event.key === 'Backspace') && selectedId !== root.id) {
     event.preventDefault()
-    removeNode(selectedId)
-    selectedId = root.id
-    render()
+    deleteSelectedBlock()
+    return
   }
+
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+    event.preventDefault()
+    undo()
+    return
+  }
+
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd') {
+    event.preventDefault()
+    copySelectedBlock()
+  }
+})
+
+window.addEventListener('resize', () => {
+  fitRootToCanvas()
+  render()
 })
 
 render()

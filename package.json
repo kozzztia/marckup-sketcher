@@ -16,6 +16,7 @@
     "electron": "^42.4.1",
     "electron-builder": "^26.15.3",
     "electron-packager": "^17.1.2",
+    "png-to-ico": "^3.0.1",
     "typescript": "~6.0.2",
     "vite": "^8.0.12"
   },
@@ -25,7 +26,7 @@
   },
   "build": {
     "appId": "com.markupsketcher.app",
-    "productName": "Markup Sketcher",
+    "productName": "Sketcher",
     "files": [
       "dist/**/*",
       "electron/**/*",
@@ -35,6 +36,7 @@
       "output": "release"
     },
     "win": {
+      "icon": "assets/app-icon.ico",
       "target": [
         "nsis",
         "portable"
