@@ -1,5 +1,16 @@
 import './style.css'
 import { Copy, Pencil, Trash2, type IconNode } from 'lucide'
+import { isValidHTMLNesting } from 'validate-html-nesting'
+
+declare global {
+  interface Window {
+    markupSketcherWindow?: {
+      minimize: () => Promise<void>
+      toggleMaximize: () => Promise<void>
+      close: () => Promise<void>
+    }
+  }
+}
 
 type BlockNode = {
   id: string
@@ -18,6 +29,8 @@ type FlatBlock = BlockNode & {
   parentId: string | null
 }
 
+type TagGroup = 'block' | 'inline'
+
 const root: BlockNode = {
   id: 'inner',
   tag: 'div',
@@ -30,12 +43,144 @@ const root: BlockNode = {
   children: [],
 }
 
-const tagOptions = ['div', 'header', 'main', 'footer', 'section', 'article', 'aside', 'nav', 'ul', 'li', 'button', 'span', 'figure']
-const presets = [
-  { label: 'Free block', tag: 'div', className: '' },
-  { label: 'Dropdown', tag: 'div', className: 'dropdown' },
-  { label: 'Toggle', tag: 'button', className: 'toggle' },
+const blockTags = [
+  'address',
+  'article',
+  'aside',
+  'blockquote',
+  'body',
+  'canvas',
+  'dd',
+  'details',
+  'dialog',
+  'div',
+  'dl',
+  'dt',
+  'fieldset',
+  'figcaption',
+  'figure',
+  'footer',
+  'form',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'header',
+  'hr',
+  'li',
+  'main',
+  'menu',
+  'nav',
+  'noscript',
+  'ol',
+  'p',
+  'pre',
+  'search',
+  'section',
+  'table',
+  'tbody',
+  'td',
+  'tfoot',
+  'th',
+  'thead',
+  'tr',
+  'ul',
 ]
+const inlineTags = [
+  'a',
+  'abbr',
+  'area',
+  'audio',
+  'b',
+  'base',
+  'bdi',
+  'bdo',
+  'br',
+  'button',
+  'cite',
+  'code',
+  'data',
+  'del',
+  'dfn',
+  'em',
+  'embed',
+  'i',
+  'iframe',
+  'img',
+  'input',
+  'ins',
+  'kbd',
+  'label',
+  'link',
+  'map',
+  'mark',
+  'math',
+  'meta',
+  'meter',
+  'object',
+  'output',
+  'picture',
+  'progress',
+  'q',
+  'rp',
+  'rt',
+  'ruby',
+  's',
+  'samp',
+  'script',
+  'select',
+  'small',
+  'source',
+  'span',
+  'strong',
+  'style',
+  'sub',
+  'sup',
+  'svg',
+  'template',
+  'textarea',
+  'time',
+  'track',
+  'u',
+  'var',
+  'video',
+  'wbr',
+]
+const allTags = [...blockTags, ...inlineTags].sort()
+const popularBlockTags = [
+  'article',
+  'aside',
+  'div',
+  'figcaption',
+  'figure',
+  'footer',
+  'form',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'header',
+  'li',
+  'main',
+  'nav',
+  'ol',
+  'p',
+  'section',
+  'table',
+  'tbody',
+  'td',
+  'tfoot',
+  'th',
+  'thead',
+  'tr',
+  'ul',
+]
+const popularInlineTags = ['a', 'br', 'button', 'em', 'i', 'img', 'input', 'label', 'option', 'select', 'small', 'span', 'strong', 'textarea']
+const voidTags = new Set(['area', 'base', 'br', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'])
 const swatches = ['', '#c8ff72', '#91e5ff', '#ffd166', '#f4a7b9', '#b8a4ff']
 const editIcon = iconSvg(Pencil)
 const copyIcon = iconSvg(Copy)
@@ -43,7 +188,9 @@ const deleteIcon = iconSvg(Trash2)
 
 let selectedId = root.id
 let activeTag = 'div'
+let activeTagGroup: TagGroup = 'block'
 let activeClass = ''
+let showAllTags = false
 let includeEmptyClasses = false
 let copied = false
 let selectorsCopied = false
@@ -58,22 +205,28 @@ app.innerHTML = `
         <h1>HTML Constructor</h1>
       </div>
       <div class="window-dots" aria-hidden="true">
-        <span></span><span></span><span></span>
+        <button id="minimizeWindow" class="minimize-dot" type="button" title="Minimize"></button>
+        <button id="maximizeWindow" class="maximize-dot" type="button" title="Maximize"></button>
+        <button id="closeWindow" class="close-dot" type="button" title="Close"></button>
       </div>
     </header>
 
     <section class="toolbar" aria-label="Tools">
       <label>
-        <span>Preset</span>
-        <select id="presetSelect"></select>
-      </label>
-      <label>
         <span>Tag</span>
         <select id="tagSelect"></select>
       </label>
+      <div class="tag-mode" role="group" aria-label="Tag type">
+        <button id="blockTagsButton" type="button">Block</button>
+        <button id="inlineTagsButton" type="button">Inline</button>
+      </div>
       <label class="class-tool">
         <span>Class</span>
         <input id="classInput" placeholder="class name" />
+      </label>
+      <label class="check-tool">
+        <input id="allTagsToggle" type="checkbox" />
+        <span>All tags</span>
       </label>
       <label class="check-tool">
         <input id="emptyClassToggle" type="checkbox" />
@@ -107,19 +260,40 @@ app.innerHTML = `
 `
 
 const canvas = document.querySelector<HTMLDivElement>('#canvas')!
-const presetSelect = document.querySelector<HTMLSelectElement>('#presetSelect')!
 const tagSelect = document.querySelector<HTMLSelectElement>('#tagSelect')!
+const blockTagsButton = document.querySelector<HTMLButtonElement>('#blockTagsButton')!
+const inlineTagsButton = document.querySelector<HTMLButtonElement>('#inlineTagsButton')!
 const classInput = document.querySelector<HTMLInputElement>('#classInput')!
+const allTagsToggle = document.querySelector<HTMLInputElement>('#allTagsToggle')!
 const emptyClassToggle = document.querySelector<HTMLInputElement>('#emptyClassToggle')!
 const copyButton = document.querySelector<HTMLButtonElement>('#copyButton')!
 const copySelectorsButton = document.querySelector<HTMLButtonElement>('#copySelectorsButton')!
 const deleteButton = document.querySelector<HTMLButtonElement>('#deleteButton')!
+const minimizeWindowButton = document.querySelector<HTMLButtonElement>('#minimizeWindow')!
+const maximizeWindowButton = document.querySelector<HTMLButtonElement>('#maximizeWindow')!
+const closeWindowButton = document.querySelector<HTMLButtonElement>('#closeWindow')!
 const selectedEditor = document.querySelector<HTMLDivElement>('#selectedEditor')!
 const treeView = document.querySelector<HTMLDivElement>('#treeView')!
 const htmlPreview = document.querySelector<HTMLPreElement>('#htmlPreview')!
 
-tagOptions.forEach((tag) => tagSelect.add(new Option(tag, tag)))
-presets.forEach((preset, index) => presetSelect.add(new Option(preset.label, String(index))))
+function currentTagOptions() {
+  if (activeTagGroup === 'block') return showAllTags ? blockTags : popularBlockTags
+  return showAllTags ? inlineTags : popularInlineTags
+}
+
+function setTagGroup(group: TagGroup, nextTag?: string) {
+  activeTagGroup = group
+  const options = currentTagOptions()
+  activeTag = nextTag ?? (options.includes(activeTag) ? activeTag : options[0])
+  render()
+}
+
+function renderTagSelect(select: HTMLSelectElement, selectedTag: string, includeSelected = false) {
+  const options = includeSelected ? (showAllTags ? allTags : Array.from(new Set([...popularBlockTags, ...popularInlineTags, selectedTag])).sort()) : currentTagOptions()
+  select.innerHTML = ''
+  options.forEach((tag) => select.add(new Option(tag, tag)))
+  select.value = selectedTag
+}
 
 function uid() {
   return `block-${Math.random().toString(16).slice(2)}`
@@ -136,29 +310,6 @@ function iconSvg(icon: IconNode) {
     .join('')
 
   return `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${children}</svg>`
-}
-
-function createPresetChildren(parent: BlockNode) {
-  if (parent.className !== 'dropdown') return []
-
-  const closeSize = {
-    width: Math.min(96, Math.max(64, parent.width * 0.22)),
-    height: 28,
-  }
-
-  return [
-    {
-      id: uid(),
-      tag: 'span',
-      className: 'close',
-      color: '#e8edf0',
-      x: parent.x + parent.width - closeSize.width - 12,
-      y: parent.y + 10,
-      width: closeSize.width,
-      height: closeSize.height,
-      children: [],
-    },
-  ]
 }
 
 function flatten(node: BlockNode, depth = 0, parentId: string | null = null): FlatBlock[] {
@@ -179,6 +330,40 @@ function findParent(id: string, node = root): BlockNode | null {
   for (const child of node.children) {
     const found = findParent(id, child)
     if (found) return found
+  }
+  return null
+}
+
+function ancestorsOf(id: string) {
+  const ancestors: BlockNode[] = []
+
+  function walk(node: BlockNode): boolean {
+    for (const child of node.children) {
+      if (child.id === id) return true
+      if (walk(child)) {
+        ancestors.unshift(child)
+        return true
+      }
+    }
+    return false
+  }
+
+  if (id !== root.id && walk(root)) {
+    ancestors.unshift(root)
+  }
+
+  return ancestors
+}
+
+function detachNode(id: string, node = root): BlockNode | null {
+  const index = node.children.findIndex((child) => child.id === id)
+  if (index >= 0) {
+    const [removed] = node.children.splice(index, 1)
+    return removed
+  }
+  for (const child of node.children) {
+    const removed = detachNode(id, child)
+    if (removed) return removed
   }
   return null
 }
@@ -208,9 +393,20 @@ function cloneNode(node: BlockNode, offsetX = 28, offsetY = 28): BlockNode {
 }
 
 function moveNodeWithChildren(node: BlockNode, dx: number, dy: number) {
-  node.x = Math.max(0, node.x + dx)
-  node.y = Math.max(0, node.y + dy)
+  node.x += dx
+  node.y += dy
   node.children.forEach((child) => moveNodeWithChildren(child, dx, dy))
+}
+
+function clampMoveDelta(node: BlockNode, dx: number, dy: number) {
+  const subtree = flatten(node)
+  const minX = Math.min(...subtree.map((item) => item.x))
+  const minY = Math.min(...subtree.map((item) => item.y))
+
+  return {
+    dx: minX + dx < 0 ? -minX : dx,
+    dy: minY + dy < 0 ? -minY : dy,
+  }
 }
 
 function areaInside(child: BlockNode, parent: BlockNode) {
@@ -221,8 +417,8 @@ function areaInside(child: BlockNode, parent: BlockNode) {
   return Math.max(0, right - left) * Math.max(0, bottom - top)
 }
 
-function chooseParent(block: BlockNode) {
-  const candidates = flatten(root).filter((item) => item.id !== block.id)
+function chooseParent(block: BlockNode, ignoredIds = new Set<string>()) {
+  const candidates = flatten(root).filter((item) => item.id !== block.id && !ignoredIds.has(item.id))
   const blockArea = block.width * block.height
   const matching = candidates
     .map((candidate) => ({ candidate, ratio: areaInside(block, candidate) / blockArea }))
@@ -232,12 +428,41 @@ function chooseParent(block: BlockNode) {
   return findNode(matching[0]?.candidate.id ?? root.id) ?? root
 }
 
+function sortChildrenByCanvas(node: BlockNode) {
+  node.children.sort((a, b) => a.x - b.x || a.y - b.y)
+  node.children.forEach(sortChildrenByCanvas)
+}
+
+function syncMovedNodeHierarchy(node: BlockNode) {
+  if (node.id === root.id) {
+    sortChildrenByCanvas(root)
+    return
+  }
+
+  const subtreeIds = new Set(flatten(node).map((item) => item.id))
+  const nextParent = chooseParent(node, subtreeIds)
+  const currentParent = findParent(node.id)
+
+  if (currentParent?.id !== nextParent.id) {
+    const detached = detachNode(node.id)
+    if (detached) {
+      nextParent.children.push(detached)
+    }
+  }
+
+  sortChildrenByCanvas(root)
+}
+
 function getLabel(block: BlockNode) {
   return `${block.tag}${block.className ? `.${block.className}` : '.-'}`
 }
 
+function escapeHtml(value: string) {
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+}
+
 function escapeAttr(value: string) {
-  return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')
+  return escapeHtml(value).replaceAll('"', '&quot;')
 }
 
 function htmlFor(node: BlockNode, level = 0): string {
@@ -246,6 +471,10 @@ function htmlFor(node: BlockNode, level = 0): string {
   const comment = `${indent}<!-- ${getLabel(node)} -->`
   const open = `${indent}<${node.tag}${classPart}>`
   const close = `${indent}</${node.tag}>`
+
+  if (voidTags.has(node.tag)) {
+    return `${comment}\n${open}`
+  }
 
   if (!node.children.length) {
     return `${comment}\n${indent}<${node.tag}${classPart}></${node.tag}>`
@@ -256,7 +485,7 @@ function htmlFor(node: BlockNode, level = 0): string {
 
 function selectorFor(node: BlockNode, level = 0): string {
   const indent = '  '.repeat(level)
-  const selector = node.className ? `.${node.className}` : `/* ${getLabel(node)} */`
+  const selector = node.className ? `.${node.className}` : node.tag
 
   if (!node.children.length) {
     return `${indent}${selector} {\n${indent}}`
@@ -265,13 +494,55 @@ function selectorFor(node: BlockNode, level = 0): string {
   return `${indent}${selector} {\n${node.children.map((child) => selectorFor(child, level + 1)).join('\n\n')}\n${indent}}`
 }
 
+function nestingIssue(node: BlockNode) {
+  const parent = findParent(node.id)
+  const parentTag = parent?.tag
+  const ancestorTags = ancestorsOf(node.id).map((ancestor) => ancestor.tag)
+
+  if (voidTags.has(node.tag) && node.children.length) return `${node.tag} cannot have children`
+  if (parentTag && !isValidHTMLNesting(parentTag, node.tag)) return `${node.tag} should not be inside ${parentTag}`
+
+  if (node.tag === 'li' && !['ul', 'ol', 'menu'].includes(parentTag ?? '')) return 'li should be inside ul, ol, or menu'
+  if (['ul', 'ol', 'menu'].includes(parentTag ?? '') && node.tag !== 'li') return `${node.tag} should not be a direct child of ${parentTag}`
+  if (node.tag === 'tr' && !['table', 'thead', 'tbody', 'tfoot'].includes(parentTag ?? '')) return 'tr should be inside table, thead, tbody, or tfoot'
+  if (['thead', 'tbody', 'tfoot'].includes(node.tag) && parentTag !== 'table') return `${node.tag} should be inside table`
+  if (node.tag === 'caption' && parentTag !== 'table') return 'caption should be inside table'
+  if (parentTag === 'table' && !['caption', 'colgroup', 'thead', 'tbody', 'tfoot', 'tr'].includes(node.tag)) return `${node.tag} should not be a direct child of table`
+  if (['thead', 'tbody', 'tfoot'].includes(parentTag ?? '') && node.tag !== 'tr') return `${node.tag} should not be a direct child of ${parentTag}`
+  if (parentTag === 'tr' && !['td', 'th'].includes(node.tag)) return `${node.tag} should not be a direct child of tr`
+  if (['td', 'th'].includes(node.tag) && parentTag !== 'tr') return `${node.tag} should be inside tr`
+  if (node.tag === 'figcaption' && parentTag !== 'figure') return 'figcaption should be inside figure'
+  if (node.tag === 'option' && !['select', 'datalist', 'optgroup'].includes(parentTag ?? '')) return 'option should be inside select'
+  if (node.tag === 'summary' && parentTag !== 'details') return 'summary should be inside details'
+  if (['dt', 'dd'].includes(node.tag) && parentTag !== 'dl') return `${node.tag} should be inside dl`
+  if (node.tag === 'form' && ancestorTags.includes('form')) return 'form should not be inside another form'
+
+  if (node.tag === 'a' && ancestorTags.includes('a')) return 'a should not be inside another a'
+  if (ancestorTags.includes('a') && ['button', 'input', 'select', 'textarea', 'label'].includes(node.tag)) {
+    return `${node.tag} should not be inside a`
+  }
+  if (ancestorTags.includes('a') && ['article', 'section', 'header', 'footer', 'nav', 'main', 'aside', 'ul', 'ol', 'li', 'table', 'form'].includes(node.tag)) {
+    return `${node.tag} inside a is suspicious`
+  }
+
+  if (parentTag === 'button' && ['a', 'button', 'input', 'select', 'textarea'].includes(node.tag)) {
+    return `${node.tag} should not be inside button`
+  }
+
+  return ''
+}
+
 function render() {
   const blocks = flatten(root)
   const selected = findNode(selectedId) ?? root
   selectedId = selected.id
 
   tagSelect.value = activeTag
+  renderTagSelect(tagSelect, activeTag)
+  blockTagsButton.classList.toggle('active', activeTagGroup === 'block')
+  inlineTagsButton.classList.toggle('active', activeTagGroup === 'inline')
   classInput.value = activeClass
+  allTagsToggle.checked = showAllTags
   emptyClassToggle.checked = includeEmptyClasses
 
   canvas.innerHTML = ''
@@ -302,18 +573,23 @@ function render() {
   })
 
   selectedEditor.innerHTML = `
-    <label><span>Tag</span><select id="selectedTag">${tagOptions.map((tag) => `<option value="${tag}" ${tag === selected.tag ? 'selected' : ''}>${tag}</option>`).join('')}</select></label>
+    <label><span>Tag</span><select id="selectedTag"></select></label>
     <label><span>Class</span><input id="selectedClass" value="${escapeAttr(selected.className)}" placeholder="-" ${selected.id === root.id ? 'disabled' : ''}></label>
     <div class="swatches">${swatches.map((color) => `<button type="button" data-color="${color}" style="--swatch:${color || 'transparent'}" aria-label="${color || 'default'}"></button>`).join('')}</div>
   `
 
   treeView.innerHTML = blocks
-    .map((block) => `<button type="button" class="${block.id === selectedId ? 'active' : ''}" data-id="${block.id}" style="padding-left:${10 + block.depth * 16}px">${getLabel(block)}</button>`)
+    .map((block) => {
+      const issue = nestingIssue(block)
+      return `<button type="button" class="${block.id === selectedId ? 'active' : ''} ${issue ? 'invalid' : ''}" data-id="${block.id}" title="${escapeAttr(issue ?? '')}" style="margin-left:${block.depth * 16}px;width:calc(100% - ${block.depth * 16}px)">${escapeHtml(getLabel(block))}</button>`
+    })
     .join('')
 
   htmlPreview.textContent = htmlFor(root)
 
-  document.querySelector<HTMLSelectElement>('#selectedTag')!.addEventListener('change', (event) => {
+  const selectedTagSelect = document.querySelector<HTMLSelectElement>('#selectedTag')!
+  renderTagSelect(selectedTagSelect, selected.tag, true)
+  selectedTagSelect.addEventListener('change', (event) => {
     selected.tag = (event.target as HTMLSelectElement).value
     render()
   })
@@ -456,9 +732,10 @@ canvas.addEventListener('pointermove', (event) => {
     const dx = point.x - startX
     const dy = point.y - startY
     movedDuringDrag ||= Math.abs(dx) > 3 || Math.abs(dy) > 3
-    moveNodeWithChildren(moving, point.x - lastMoveX, point.y - lastMoveY)
-    lastMoveX = point.x
-    lastMoveY = point.y
+    const delta = clampMoveDelta(moving, point.x - lastMoveX, point.y - lastMoveY)
+    moveNodeWithChildren(moving, delta.dx, delta.dy)
+    lastMoveX += delta.dx
+    lastMoveY += delta.dy
     render()
     return
   }
@@ -491,6 +768,9 @@ canvas.addEventListener('pointerup', (event) => {
   if (moving) {
     canvas.releasePointerCapture(event.pointerId)
     const movedNodeId = moving.id
+    if (movedDuringDrag) {
+      syncMovedNodeHierarchy(moving)
+    }
     moving = null
     render()
     if (!movedDuringDrag) {
@@ -511,7 +791,6 @@ canvas.addEventListener('pointerup', (event) => {
   if (!draft) return
   canvas.releasePointerCapture(event.pointerId)
   if (draft.width > 18 && draft.height > 18) {
-    draft.children = createPresetChildren(draft)
     const parent = chooseParent(draft)
     parent.children.push(draft)
     selectedId = draft.id
@@ -520,21 +799,27 @@ canvas.addEventListener('pointerup', (event) => {
   render()
 })
 
-presetSelect.addEventListener('change', () => {
-  const preset = presets[Number(presetSelect.value)]
-  activeTag = preset.tag
-  activeClass = preset.className
-  render()
-})
-
 tagSelect.addEventListener('change', () => {
   activeTag = tagSelect.value
-  presetSelect.value = '0'
+})
+
+blockTagsButton.addEventListener('click', () => {
+  setTagGroup('block')
+})
+
+inlineTagsButton.addEventListener('click', () => {
+  setTagGroup('inline')
 })
 
 classInput.addEventListener('input', () => {
   activeClass = classInput.value
-  presetSelect.value = '0'
+})
+
+allTagsToggle.addEventListener('change', () => {
+  showAllTags = allTagsToggle.checked
+  const options = currentTagOptions()
+  activeTag = options.includes(activeTag) ? activeTag : options[0]
+  render()
 })
 
 emptyClassToggle.addEventListener('change', () => {
@@ -547,6 +832,18 @@ deleteButton.addEventListener('click', () => {
   removeNode(selectedId)
   selectedId = root.id
   render()
+})
+
+minimizeWindowButton.addEventListener('click', () => {
+  void window.markupSketcherWindow?.minimize()
+})
+
+maximizeWindowButton.addEventListener('click', () => {
+  void window.markupSketcherWindow?.toggleMaximize()
+})
+
+closeWindowButton.addEventListener('click', () => {
+  void window.markupSketcherWindow?.close()
 })
 
 copyButton.addEventListener('click', async () => {
@@ -596,6 +893,9 @@ treeView.addEventListener('click', (event) => {
 })
 
 window.addEventListener('keydown', (event) => {
+  const target = event.target as HTMLElement | null
+  if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+
   if ((event.key === 'Delete' || event.key === 'Backspace') && selectedId !== root.id) {
     event.preventDefault()
     removeNode(selectedId)

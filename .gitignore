@@ -12,6 +12,7 @@ dist
 dist-ssr
 build
 release
+packaged
 out
 coverage
 .vite
