@@ -208,9 +208,10 @@ let rootManuallyResized = false
 let history: string[] = []
 
 const app = document.querySelector<HTMLDivElement>('#app')!
+const isElectronShell = Boolean(window.markupSketcherWindow)
 
 app.innerHTML = `
-  <div class="window-shell">
+  <div class="window-shell ${isElectronShell ? 'is-electron' : 'is-browser'}">
     <header class="titlebar">
       <div class="title-copy">
         <p class="eyebrow">Sketcher</p>
