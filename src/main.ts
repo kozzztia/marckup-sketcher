@@ -462,25 +462,10 @@ function flexStylesFor(node: BlockNode, level: number) {
   if (!node.flex) return ''
 
   const indent = '  '.repeat(level + 1)
-  const justifyMap = {
-    start: 'flex-start',
-    center: 'center',
-    between: 'space-between',
-    end: 'flex-end',
-  }
-  const alignMap = {
-    start: 'flex-start',
-    center: 'center',
-    stretch: 'stretch',
-    end: 'flex-end',
-  }
-
   return [
     `${indent}display: flex;`,
-    `${indent}flex-direction: ${node.flexDirection};`,
-    `${indent}justify-content: ${justifyMap[node.justifyContent]};`,
-    `${indent}align-items: ${alignMap[node.alignItems]};`,
-    `${indent}gap: ${node.gap}px;`,
+    `${indent}flex-direction: row;`,
+    `${indent}justify-content: space-between;`,
   ].join('\n')
 }
 
@@ -504,7 +489,6 @@ function applyFlexLayout(parent: BlockNode) {
   if (!parent.flex || parent.locked || !parent.children.length) return
 
   const padding = 18
-  const gap = Math.max(0, parent.gap)
   const count = parent.children.length
   const innerLeft = parent.x + padding
   const innerTop = parent.y + padding + 24
@@ -512,72 +496,28 @@ function applyFlexLayout(parent: BlockNode) {
   const innerHeight = Math.max(48, parent.height - padding * 2 - 24)
   const savedBox = (child: BlockNode) => parent.flexSnapshot[child.id] ?? child
 
-  if (parent.flexDirection === 'row') {
-    const naturalWidths = parent.children.map((child) => Math.max(36, Math.min(savedBox(child).width, innerWidth)))
-    const naturalTotal = naturalWidths.reduce((sum, width) => sum + width, 0)
-    const availableForItems = Math.max(36 * count, innerWidth - gap * (count - 1))
-    const scale = naturalTotal > availableForItems ? availableForItems / naturalTotal : 1
-    const itemWidths = naturalWidths.map((width) => width * scale)
-    const totalWidth = itemWidths.reduce((sum, width) => sum + width, 0) + gap * (count - 1)
-    const startX =
-      parent.justifyContent === 'center'
-        ? innerLeft + (innerWidth - totalWidth) / 2
-        : parent.justifyContent === 'end'
-          ? innerLeft + innerWidth - totalWidth
-          : innerLeft
-    const distributedGap =
-      parent.justifyContent === 'between' && count > 1 ? Math.max(gap, (innerWidth - itemWidths.reduce((sum, width) => sum + width, 0)) / (count - 1)) : gap
-    let currentX = startX
-
-    parent.children.forEach((child, index) => {
-      const naturalBox = savedBox(child)
-      const itemWidth = itemWidths[index]
-      const itemHeight = parent.alignItems === 'stretch' ? innerHeight : Math.min(innerHeight, naturalBox.height)
-      child.x = currentX
-      child.width = itemWidth
-      child.height = itemHeight
-      child.y =
-        parent.alignItems === 'center'
-          ? innerTop + (innerHeight - itemHeight) / 2
-          : parent.alignItems === 'end'
-            ? innerTop + innerHeight - itemHeight
-            : innerTop
-      currentX += itemWidth + distributedGap
-      applyFlexLayout(child)
-    })
-    return
-  }
-
-  const naturalHeights = parent.children.map((child) => Math.max(36, Math.min(savedBox(child).height, innerHeight)))
-  const naturalTotal = naturalHeights.reduce((sum, height) => sum + height, 0)
-  const availableForItems = Math.max(36 * count, innerHeight - gap * (count - 1))
+  const naturalWidths = parent.children.map((child) => Math.max(36, Math.min(savedBox(child).width, innerWidth)))
+  const naturalTotal = naturalWidths.reduce((sum, width) => sum + width, 0)
+  const availableForItems = Math.max(36 * count, innerWidth)
   const scale = naturalTotal > availableForItems ? availableForItems / naturalTotal : 1
-  const itemHeights = naturalHeights.map((height) => height * scale)
-  const totalHeight = itemHeights.reduce((sum, height) => sum + height, 0) + gap * (count - 1)
-  const startY =
-    parent.justifyContent === 'center'
-      ? innerTop + (innerHeight - totalHeight) / 2
-      : parent.justifyContent === 'end'
-        ? innerTop + innerHeight - totalHeight
-        : innerTop
-  const distributedGap =
-    parent.justifyContent === 'between' && count > 1 ? Math.max(gap, (innerHeight - itemHeights.reduce((sum, height) => sum + height, 0)) / (count - 1)) : gap
-  let currentY = startY
+  const itemWidths = naturalWidths.map((width) => width * scale)
+  const totalWidth = itemWidths.reduce((sum, width) => sum + width, 0)
+  const distributedGap = count > 1 ? Math.max(0, (innerWidth - totalWidth) / (count - 1)) : 0
+  let currentX = innerLeft
 
   parent.children.forEach((child, index) => {
-    const naturalBox = savedBox(child)
-    const itemHeight = itemHeights[index]
-    const itemWidth = parent.alignItems === 'stretch' ? innerWidth : Math.min(innerWidth, naturalBox.width)
-    child.y = currentY
-    child.height = itemHeight
+    const itemWidth = itemWidths[index]
+    const itemHeight = innerHeight
+    const nextX = currentX
+    const nextY = innerTop
+    const dx = nextX - child.x
+    const dy = nextY - child.y
+    child.x = nextX
     child.width = itemWidth
-    child.x =
-      parent.alignItems === 'center'
-        ? innerLeft + (innerWidth - itemWidth) / 2
-        : parent.alignItems === 'end'
-          ? innerLeft + innerWidth - itemWidth
-          : innerLeft
-    currentY += itemHeight + distributedGap
+    child.height = itemHeight
+    child.y = nextY
+    child.children.forEach((grandChild) => moveNodeWithChildren(grandChild, dx, dy))
+    currentX += itemWidth + distributedGap
     applyFlexLayout(child)
   })
 }
@@ -840,27 +780,6 @@ function render() {
         <span>Flex</span>
         <input id="selectedFlex" type="checkbox" ${selected.flex ? 'checked' : ''} ${selected.locked || !canUseFlex ? 'disabled' : ''}>
       </label>
-      <div class="flex-drawer">
-      <div class="flex-grid">
-        <label><span>Direction</span><select id="selectedFlexDirection" ${!selected.flex || selected.locked ? 'disabled' : ''}>
-          <option value="row" ${selected.flexDirection === 'row' ? 'selected' : ''}>row</option>
-          <option value="column" ${selected.flexDirection === 'column' ? 'selected' : ''}>column</option>
-        </select></label>
-        <label><span>Gap</span><input id="selectedFlexGap" type="number" min="0" max="96" value="${selected.gap}" ${!selected.flex || selected.locked ? 'disabled' : ''}></label>
-        <label><span>Justify</span><select id="selectedJustify" ${!selected.flex || selected.locked ? 'disabled' : ''}>
-          <option value="start" ${selected.justifyContent === 'start' ? 'selected' : ''}>start</option>
-          <option value="center" ${selected.justifyContent === 'center' ? 'selected' : ''}>center</option>
-          <option value="between" ${selected.justifyContent === 'between' ? 'selected' : ''}>between</option>
-          <option value="end" ${selected.justifyContent === 'end' ? 'selected' : ''}>end</option>
-        </select></label>
-        <label><span>Align</span><select id="selectedAlign" ${!selected.flex || selected.locked ? 'disabled' : ''}>
-          <option value="start" ${selected.alignItems === 'start' ? 'selected' : ''}>start</option>
-          <option value="center" ${selected.alignItems === 'center' ? 'selected' : ''}>center</option>
-          <option value="stretch" ${selected.alignItems === 'stretch' ? 'selected' : ''}>stretch</option>
-          <option value="end" ${selected.alignItems === 'end' ? 'selected' : ''}>end</option>
-        </select></label>
-      </div>
-      </div>
     </div>
     <div class="swatches">${swatches.map((color) => `<button type="button" data-color="${color}" style="--swatch:${color || 'transparent'}" aria-label="${color || 'default'}"></button>`).join('')}</div>
   `
@@ -921,39 +840,15 @@ function render() {
     pushHistory()
     selected.flex = (event.target as HTMLInputElement).checked
     if (selected.flex) {
+      selected.flexDirection = 'row'
+      selected.justifyContent = 'start'
+      selected.alignItems = 'stretch'
+      selected.gap = 0
       saveFlexSnapshot(selected)
       applyFlexLayout(selected)
     } else {
       restoreFlexSnapshot(selected)
     }
-    render()
-  })
-  document.querySelector<HTMLSelectElement>('#selectedFlexDirection')!.addEventListener('change', (event) => {
-    if (selected.locked) return
-    pushHistory()
-    selected.flexDirection = (event.target as HTMLSelectElement).value as BlockNode['flexDirection']
-    applyFlexLayout(selected)
-    render()
-  })
-  document.querySelector<HTMLSelectElement>('#selectedJustify')!.addEventListener('change', (event) => {
-    if (selected.locked) return
-    pushHistory()
-    selected.justifyContent = (event.target as HTMLSelectElement).value as BlockNode['justifyContent']
-    applyFlexLayout(selected)
-    render()
-  })
-  document.querySelector<HTMLSelectElement>('#selectedAlign')!.addEventListener('change', (event) => {
-    if (selected.locked) return
-    pushHistory()
-    selected.alignItems = (event.target as HTMLSelectElement).value as BlockNode['alignItems']
-    applyFlexLayout(selected)
-    render()
-  })
-  document.querySelector<HTMLInputElement>('#selectedFlexGap')!.addEventListener('change', (event) => {
-    if (selected.locked) return
-    pushHistory()
-    selected.gap = Math.max(0, Math.min(96, Number((event.target as HTMLInputElement).value) || 0))
-    applyFlexLayout(selected)
     render()
   })
 }
